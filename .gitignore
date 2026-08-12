@@ -1,0 +1,80 @@
+# ============================================================
+# .NET / MSBuild
+# ============================================================
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.nuget/
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Publish output
+publish/
+PublishProfiles/
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# ============================================================
+# Secrets / credentials — never commit these
+# ============================================================
+# Local appsettings overrides that may contain connection strings
+appsettings.local.json
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.local.json
+
+# Secret files
+secrets.json
+connectionstrings.json
+credentials.json
+*.env
+.env
+.env.*
+
+# User-secrets (dotnet user-secrets stores here during dev)
+# Real path is outside the repo, but guard any accidental copies
+**/secrets/**
+
+# The tool's own saved connection profiles live outside the repo at
+# ~/.sql-database-checkpoints/connections.json — guarded here in case
+# someone copies the file into the project directory.
+connections.json
+
+# ============================================================
+# IDE / editors
+# ============================================================
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.fleet/
+
+# Rider
+.idea/
+*.DotSettings.user
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Misc
+# ============================================================
+*.log
+*.tmp
+*.bak
