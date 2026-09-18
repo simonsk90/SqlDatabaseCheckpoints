@@ -253,4 +253,33 @@ public class CheckpointPocTests : IntegrationTestBase
         plan.DeletesToRestore.Should().Be(1);
         plan.CanProceed.Should().BeTrue();
     }
+
+    // ─── Test 11 (temp repro): UPDATE rollback must not NULL-out untouched NOT NULL LOB column ──
+
+    [Fact]
+    public async Task Test11_UpdateRollback_DoesNotTouchUnchangedNotNullMaxColumn()
+    {
+        await ExecAsync("""
+            CREATE TABLE dbo.AgeGroups (
+                Id          INT             IDENTITY(1,1) PRIMARY KEY,
+                Description NVARCHAR(100)   NOT NULL,
+                Type        NVARCHAR(MAX)   NOT NULL
+            )
+            """);
+        await SqlServerService.InitializeAsync();
+
+        await ExecAsync("INSERT INTO dbo.AgeGroups (Description, Type) VALUES (N'3 - 6 år', N'Standard')");
+        var cpA = await CheckpointService.CreateCheckpointAsync("A", TestServer, TestDatabase);
+
+        // Only Description changes — Type is untouched.
+        await ExecAsync("UPDATE dbo.AgeGroups SET Description = N'3 - 6 år haha' WHERE Id = 1");
+        var cpB = await CheckpointService.CreateCheckpointAsync("B", TestServer, TestDatabase);
+
+        await RollbackService.ExecuteRollbackAsync(cpB, cpA, TestServer, TestDatabase);
+
+        var descriptions = await QueryColumnAsync("SELECT Description FROM dbo.AgeGroups ORDER BY Id");
+        var types = await QueryColumnAsync("SELECT Type FROM dbo.AgeGroups ORDER BY Id");
+        descriptions.Should().BeEquivalentTo(["3 - 6 år"]);
+        types.Should().BeEquivalentTo(["Standard"], because: "Type was never changed and must survive the rollback");
+    }
 }

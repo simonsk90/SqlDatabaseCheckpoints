@@ -94,10 +94,28 @@ public class SqlServerChangeReader
 
         await using var cmd = conn.CreateCommand();
 
+        // For each captured column, ask SQL Server (via sys.fn_cdc_is_bit_set) whether that
+        // column's bit is set in __$update_mask. This tells us — per row — which columns
+        // actually changed in an UPDATE. This matters because for UPDATE before-images (op=3),
+        // large-object columns (varchar(max)/nvarchar(max)/varbinary(max)/text/ntext/image) are
+        // always returned as NULL when they did NOT change, even if the live column is NOT NULL.
+        // Without this, blindly restoring every non-PK column on rollback can wipe out unrelated
+        // columns with NULL. See: Microsoft Learn docs for
+        // cdc.fn_cdc_get_all_changes_<capture_instance> "Remarks" section.
+        var maskColumns = table.Columns
+            .Select(c => c.ColumnName)
+            .Select(colName => (
+                ColumnName: colName,
+                Alias: $"__cdcmask_{colName}"))
+            .ToList();
+
+        var maskSelectClauses = maskColumns.Select(m =>
+            $"sys.fn_cdc_is_bit_set(sys.fn_cdc_get_column_ordinal(N'{captureInstance.Replace("'", "''")}', N'{m.ColumnName.Replace("'", "''")}'), __$update_mask) AS [{m.Alias}]");
+
         // The 'all update old' option returns op=3 (before-image) + op=4 (after-image) for updates.
         // We use this so we have the before-image values needed to reverse UPDATEs.
         cmd.CommandText = $"""
-            SELECT *
+            SELECT *, {string.Join(", ", maskSelectClauses)}
             FROM cdc.fn_cdc_get_all_changes_{captureInstance}(@from_lsn, @to_lsn, N'all update old')
             ORDER BY __$start_lsn ASC, __$seqval ASC
             """;
@@ -111,17 +129,22 @@ public class SqlServerChangeReader
         int seqOrdinal = reader.GetOrdinal("__$seqval");
         int opOrdinal = reader.GetOrdinal("__$operation");
 
-        // Identify data column positions (skip CDC metadata columns)
+        // Identify data column positions (skip CDC metadata columns and the mask columns we added)
         var cdcMetaColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "__$start_lsn", "__$seqval", "__$operation", "__$update_mask" };
+        var maskAliasSet = new HashSet<string>(maskColumns.Select(m => m.Alias), StringComparer.OrdinalIgnoreCase);
 
         var dataColumnOrdinals = new List<(string Name, int Ordinal)>();
         for (int i = 0; i < reader.FieldCount; i++)
         {
             var name = reader.GetName(i);
-            if (!cdcMetaColumns.Contains(name))
+            if (!cdcMetaColumns.Contains(name) && !maskAliasSet.Contains(name))
                 dataColumnOrdinals.Add((name, i));
         }
+
+        var maskOrdinals = maskColumns
+            .Select(m => (m.ColumnName, Ordinal: reader.GetOrdinal(m.Alias)))
+            .ToList();
 
         while (await reader.ReadAsync(ct))
         {
@@ -136,6 +159,20 @@ public class SqlServerChangeReader
                 columnValues[name] = val is DBNull ? null : val;
             }
 
+            // Only meaningful for updates — tells us which columns actually changed so we
+            // don't overwrite untouched columns (e.g. unchanged LOB columns) with stale NULLs.
+            HashSet<string>? changedColumns = null;
+            if (op is CdcOperation.UpdateBefore or CdcOperation.UpdateAfter)
+            {
+                changedColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (colName, ordinal) in maskOrdinals)
+                {
+                    var bitValue = reader[ordinal];
+                    if (bitValue is not DBNull && Convert.ToInt32(bitValue) == 1)
+                        changedColumns.Add(colName);
+                }
+            }
+
             changes.Add(new CdcChangeRow
             {
                 StartLsn = lsn,
@@ -145,7 +182,8 @@ public class SqlServerChangeReader
                 TableName = table.TableName,
                 ColumnValues = columnValues,
                 PrimaryKeyColumns = table.PrimaryKeyColumns,
-                IdentityColumn = table.IdentityColumn
+                IdentityColumn = table.IdentityColumn,
+                ChangedColumns = changedColumns
             });
         }
 

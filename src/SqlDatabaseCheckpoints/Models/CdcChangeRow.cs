@@ -20,6 +20,14 @@ public class CdcChangeRow
     /// <summary>Identity column name, if the table has one. Null otherwise.</summary>
     public string? IdentityColumn { get; set; }
 
+    /// <summary>
+    /// For UpdateBefore/UpdateAfter rows: the set of columns that actually changed in this
+    /// UPDATE (derived from CDC's __$update_mask). Null for Insert/Delete rows.
+    /// Used to avoid restoring untouched columns — CDC returns NULL for unchanged LOB
+    /// (varchar(max)/nvarchar(max)/varbinary(max)/text/ntext/image) columns in before-images.
+    /// </summary>
+    public HashSet<string>? ChangedColumns { get; set; }
+
     public string FullTableName => $"[{SchemaName}].[{TableName}]";
 }
 

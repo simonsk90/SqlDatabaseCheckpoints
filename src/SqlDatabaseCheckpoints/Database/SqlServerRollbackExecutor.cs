@@ -181,6 +181,10 @@ public class SqlServerRollbackExecutor
         var nonPkNonComputedColumns = change.ColumnValues.Keys
             .Where(col => !change.PrimaryKeyColumns.Contains(col, StringComparer.OrdinalIgnoreCase))
             .Where(col => IsWritableUpdateColumn(tableInfo, col))
+            // Only restore columns that actually changed in this UPDATE. Untouched columns —
+            // especially LOB types — can be NULL in the before-image even though the live
+            // column is NOT NULL, so restoring them unconditionally can corrupt unrelated data.
+            .Where(col => change.ChangedColumns is null || change.ChangedColumns.Contains(col))
             .ToList();
 
         if (nonPkNonComputedColumns.Count == 0)
